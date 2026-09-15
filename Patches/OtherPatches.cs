@@ -1,0 +1,510 @@
+using HarmonyLib;
+using AmongUs.Data;
+using AmongUs.Data.Player;
+using AmongUs.GameOptions;
+using UnityEngine;
+using TMPro;
+using System;
+using System.Security.Cryptography;
+using InnerNet;
+using System.Collections.Generic;
+
+namespace SocietyMenu;
+
+[HarmonyPatch(typeof(Constants), nameof(Constants.GetPlatformData))]
+public static class Constants_GetPlatformData
+{
+    // Postfix patch of Constants.GetPlatformData to spoof the user's platform type
+    public static void Postfix(ref PlatformSpecificData __result)
+    {
+        if (Utils.StringToPlatformType(KEWLMENU.spoofPlatform.Value, out Platforms? platformType))
+        {
+            __result = new PlatformSpecificData
+            {
+                Platform = (Platforms)platformType,
+                PlatformName = Constants.GetPlatformName()
+            };
+        }
+    }
+}
+
+[HarmonyPatch(typeof(GameData), nameof(GameData.HandleDisconnect), new[] { typeof(PlayerControl), typeof(DisconnectReasons) })]
+public static class GameData_HandleDisconnect
+{
+    public static HashSet<int> disconnectQueue = new();
+
+    // Prefix patch of GameData.HandleDisconnect to keep track of successful overloads
+    public static void Prefix(PlayerControl player)
+    {
+        if (!CheatToggles.runOverload) return;
+
+        NetworkedPlayerInfo playerData = player?.Data;
+        if (playerData == null) return;
+
+        bool isTarget = OverloadUI.currentTargets.Contains(playerData);
+
+        if (isTarget) disconnectQueue.Add(playerData.ClientId);
+    }
+
+    // Postfix patch of GameData.HandleDisconnect to keep track of successful overloads
+    // (Avoids race-condition double counting)
+    public static void Postfix(PlayerControl player)
+    {
+        if (!CheatToggles.runOverload) return;
+
+        NetworkedPlayerInfo playerData = player?.Data;
+        if (playerData == null) return;
+
+        int clientId = player.Data.ClientId;
+
+        if (disconnectQueue.Contains(clientId))
+        {
+            OverloadUI.numSuccesses++;
+
+            if (CheatToggles.olLogDisconnect)
+            {
+                int total = OverloadUI.currentTargets.Count // Targets still connected
+                            + OverloadUI.numSuccesses // Targets already crashed
+                            - disconnectQueue.Count; // Pending disconnect logs (Avoids race-condition double counting)
+
+                string colorStr = ColorUtility.ToHtmlStringRGB(Color.green);
+
+                OverloadUI.LogConsole($"> <b><color=#{colorStr}>!! {playerData.DefaultOutfit.PlayerName} (ID : {playerData.ClientId}) Disconnected !! - [{OverloadUI.numSuccesses}/{total}]</color></b>");
+            }
+
+            disconnectQueue.Remove(clientId);
+        }
+    }
+}
+
+[HarmonyPatch(typeof(FreeChatInputField), nameof(FreeChatInputField.UpdateCharCount))]
+public static class FreeChatInputField_UpdateCharCount
+{
+    // Postfix patch of FreeChatInputField.UpdateCharCount to change how charCountText displays
+    public static void Postfix(FreeChatInputField __instance)
+    {
+        // Only works if CheatToggles.longerMsgs is enabled
+        if (!CheatToggles.longerMessages) return;
+
+        // Update charCountText to account for longer characterLimit
+        int length = __instance.textArea.text.Length;
+        __instance.charCountText.SetText($"{length}/{__instance.textArea.characterLimit}");
+
+        if (length < 90) // Under 75%
+        {
+            __instance.charCountText.color = Color.black;
+        }
+        else if (length < 120) // Under 100%
+        {
+            __instance.charCountText.color = new Color(1f, 1f, 0f, 1f);
+        }
+        else // Over or equal to 100%
+        {
+            __instance.charCountText.color = Color.red;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(ChatBubble), nameof(ChatBubble.SetName))]
+public static class ChatBubble_SetName
+{
+    public static void Postfix(ChatBubble __instance)
+    {
+        SocietyMenuESP.ChatNametags(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(SystemInfo), nameof(SystemInfo.deviceUniqueIdentifier), MethodType.Getter)]
+public static class SystemInfo_deviceUniqueIdentifier_Getter
+{
+    // Postfix patch of SystemInfo.deviceUniqueIdentifier Getter method
+    // Made to hide the user's real unique deviceId by generating a random fake one
+    public static void Postfix(ref string __result)
+    {
+        if (!KEWLMENU.spoofDeviceId.Value) return;
+
+        var bytes = new byte[16];
+        using (var rng = RandomNumberGenerator.Create())
+        {
+            rng.GetBytes(bytes);
+        }
+
+        __result = BitConverter.ToString(bytes).Replace("-", "").ToLower();
+    }
+}
+
+[HarmonyPatch(typeof(VersionShower), nameof(VersionShower.Start))]
+public static class VersionShower_Start
+{
+    // Postfix patch of VersionShower.Start to show version info
+    public static void Postfix(VersionShower __instance)
+    {
+        if (KEWLMENU.inStealthMode || KEWLMENU.isPanicked) return;
+
+        if (KEWLMENU.supportedAU.Contains(Application.version)) // Checks if Among Us version is supported
+        {
+            __instance.text.text = $"KEWLMENU by omqItzrlyjames v{KEWLMENU.societyVersion} (Among Us v{Application.version})"; // Supported
+        }
+        else if (KEWLMENU.toleratedAU.Contains(Application.version)) // Checks if Among Us version is tolerated
+        {
+            __instance.text.text = $"KEWLMENU by omqItzrlyjames v{KEWLMENU.societyVersion} (<color=yellow>Among Us v{Application.version}</color>)"; // Tolerated
+        }
+        else
+        {
+            __instance.text.text = $"KEWLMENU by omqItzrlyjames v{KEWLMENU.societyVersion} (<color=red>Among Us v{Application.version}</color>)"; // Unsupported
+        }
+    }
+}
+
+[HarmonyPatch(typeof(PingTracker), nameof(PingTracker.Update))]
+public static class PingTracker_Update
+{
+    // Postfix patch of PingTracker.Update to show SocietyMenu authors and colored ping text
+    public static void Postfix(PingTracker __instance)
+    {
+        if (KEWLMENU.inStealthMode)
+        {
+            __instance.text.alignment = TMPro.TextAlignmentOptions.TopLeft;
+
+            return;
+        }
+
+        __instance.text.alignment = TMPro.TextAlignmentOptions.Center;
+
+        int ping = Utils.GetPing();
+        string pingStr = $"PING : {ping} ms";
+        string pingText = Utils.GetColoredPingText(pingStr, ping);
+
+        if (AmongUsClient.Instance.IsGameStarted)
+        {
+            __instance.aspectPosition.DistanceFromEdge = new Vector3(-0.21f, 0.50f, 0f);
+
+            __instance.text.text = $"KEWLMENU by omqItzrlyjames ~ {Utils.GetColoredPingText($"PING : {AmongUsClient.Instance.Ping} ms", AmongUsClient.Instance.Ping)}";
+
+            return;
+        }
+
+        __instance.text.text = $"KEWLMENU by omqItzrlyjames\n{Utils.GetColoredPingText($"PING : {AmongUsClient.Instance.Ping} ms", AmongUsClient.Instance.Ping)}";
+
+    }
+}
+
+[HarmonyPatch(typeof(DisconnectPopup), nameof(DisconnectPopup.DoShow))]
+public static class DisconnectPopup_DoShow
+{
+    // Postfix patch of DisconnectPopup.DoShow to copy lobby code to clipboard on disconnect
+    public static void Postfix(DisconnectPopup __instance)
+    {
+        if (!CheatToggles.copyLobbyCodeOnDisconnect) return;
+
+        GUIUtility.systemCopyBuffer = AmongUsClient_OnGameJoined.lastGameIdString;
+
+        __instance.SetText(__instance._textArea.text + "\n\n<size=60%>Lobby code has been copied to the clipboard</size>");
+    }
+}
+
+[HarmonyPatch(typeof(PlayerBanData), nameof(PlayerBanData.BanMinutesLeft), MethodType.Getter)]
+public static class PlayerBanData_BanMinutesLeft_Getter
+{
+    // Postfix patch of PlayerBanData.BanMinutesLeft Getter method to remove disconnect penalty
+    public static void Postfix(PlayerBanData __instance, ref int __result)
+    {
+        if (!CheatToggles.avoidPenalties) return;
+
+        __instance.BanPoints = 0f; // Removes all BanPoints
+        __result = 0; // Removes all BanMinutes
+    }
+}
+
+[HarmonyPatch(typeof(FullAccount), nameof(FullAccount.CanSetCustomName))]
+public static class FullAccount_CanSetCustomName
+{
+    // Prefix patch of FullAccount.CanSetCustomName to allow the usage of custom names
+    public static void Prefix(ref bool canSetName)
+    {
+        if (CheatToggles.unlockFeatures)
+        {
+            canSetName = true;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(AccountManager), nameof(AccountManager.CanPlayOnline))]
+public static class AccountManager_CanPlayOnline
+{
+    // Prefix patch of AccountManager.CanPlayOnline to allow online games
+    public static void Postfix(ref bool __result)
+    {
+        if (CheatToggles.unlockFeatures)
+        {
+            __result = true;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(InnerNetClient), nameof(InnerNetClient.JoinGame))]
+public static class InnerNetClient_JoinGame
+{
+    // Prefix patch of InnerNetClient.JoinGame to allow online games
+    public static void Prefix()
+    {
+        if (CheatToggles.unlockFeatures)
+        {
+            DataManager.Player.Account.LoginStatus = EOSManager.AccountLoginStatus.LoggedIn;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(GameManager), nameof(GameManager.CheckTaskCompletion))]
+public static class GameManager_CheckTaskCompletion
+{
+    // Prefix patch of GameManager.CheckTaskCompletion to prevent a running game from ending
+    public static bool Prefix(ref bool __result)
+    {
+        if (!CheatToggles.noGameEnd) return true;
+
+        __result = false;
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(Mushroom), nameof(Mushroom.FixedUpdate))]
+public static class Mushroom_FixedUpdate
+{
+    public static void Postfix(Mushroom __instance)
+    {
+        SocietyMenuESP.SporeCloudVision(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(DoorBreakerGame), nameof(DoorBreakerGame.Start))]
+public static class DoorBreakerGame_Start
+{
+    // Prefix patch of DoorBreakerGame.Start to automatically open a door when the player interacts with it
+    public static bool Prefix(DoorBreakerGame __instance)
+    {
+        if (!CheatToggles.autoOpenDoorsOnUse) return true;
+
+        DoorsHandler.OpenDoor(__instance.MyDoor);
+        __instance.MyDoor.SetDoorway(true);
+        __instance.Close();
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(DoorCardSwipeGame), nameof(DoorCardSwipeGame.Begin))]
+public static class DoorCardSwipeGame_Begin
+{
+    // Prefix patch of DoorCardSwipeGame.Begin to automatically open a door when the player interacts with it
+    public static bool Prefix(DoorCardSwipeGame __instance)
+    {
+        if (!CheatToggles.autoOpenDoorsOnUse) return true;
+
+        DoorsHandler.OpenDoor(__instance.MyDoor);
+        __instance.MyDoor.SetDoorway(true);
+        __instance.Close();
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(MushroomDoorSabotageMinigame), nameof(MushroomDoorSabotageMinigame.Begin))]
+public static class MushroomDoorSabotageMinigame_Begin
+{
+    // Prefix patch of MushroomDoorSabotageMinigame.Begin to automatically open a door when the player interacts with it
+    public static bool Prefix(MushroomDoorSabotageMinigame __instance)
+    {
+        if (!CheatToggles.autoOpenDoorsOnUse) return true;
+
+        __instance.FixDoorAndCloseMinigame();
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(Console), nameof(Console.CanUse))]
+public static class Console_CanUse
+{
+    // Prefix patch of Console.CanUse to allow impostors to do tasks
+    public static void Prefix(Console __instance)
+    {
+        if (CheatToggles.impostorTasks)
+        {
+            __instance.AllowImpostor = true;
+        }
+    }
+
+    // Postfix patch of Console.CanUse to allow any player to use any task console when in range
+    public static void Postfix(Console __instance, ref float __result, ref bool canUse, ref bool couldUse)
+    {
+        if (!CheatToggles.fakeTasks) return;
+
+        float distance = Vector2.Distance(PlayerControl.LocalPlayer.GetTruePosition(), __instance.transform.position);
+
+        if (distance <= __instance.UsableDistance)
+        {
+            canUse = true;
+            couldUse = true;
+            __result = distance;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(IntroCutscene), "CoBegin")]
+public static class IntroCutscene_CoBegin
+{
+    // Prefix patch of IntroCutscene.CoBegin to force the LocalPlayer's role to a specified role
+    public static void Prefix()
+    {
+        if (!Utils.isHost || !CheatToggles.forcedRole.HasValue) return;
+
+        var forcedRole = CheatToggles.forcedRole.Value;
+
+        // If LocalPlayer already has the forced role, do nothing
+        if (PlayerControl.LocalPlayer.Data.RoleType == forcedRole)
+        {
+            return;
+        }
+
+        // Find a player with the forced role to swap roles with
+        PlayerControl roleSwapTarget = null;
+        foreach (var player in PlayerControl.AllPlayerControls)
+        {
+            if (player.Data.RoleType != forcedRole) continue;
+            roleSwapTarget = player;
+            break;
+        }
+
+        DestroyableSingleton<RoleManager>.Instance.SetRole(PlayerControl.LocalPlayer, forcedRole);
+
+        if (roleSwapTarget != null)
+        {
+            DestroyableSingleton<RoleManager>.Instance.SetRole(roleSwapTarget, PlayerControl.LocalPlayer.Data.RoleType);
+        }
+    }
+}
+
+[HarmonyPatch(typeof(GameContainer), nameof(GameContainer.SetupGameInfo))]
+public static class GameContainer_SetupGameInfo
+{
+    public static bool Prepare() => false;
+
+    private const string HostNameObject = "MenaceLobbyHostName";
+
+    // Postfix patch of GameContainer.SetupGameInfo to show more lobby info
+    public static void Postfix(GameContainer __instance)
+    {
+        if (__instance == null || __instance.gameListing == null || __instance.capacity == null || __instance.mapBackground == null)
+            return;
+
+        Transform nameParent = __instance.mapBackground.transform;
+        Transform existingName = nameParent.Find(HostNameObject);
+        if (!CheatToggles.seeLobbyInfo)
+        {
+            if (existingName != null)
+                existingName.gameObject.SetActive(false);
+            return;
+        }
+
+        const string separator = "<#0000>000000000000000</color>";
+
+        var trueHostName = __instance.gameListing.TrueHostName;
+        if (string.IsNullOrWhiteSpace(trueHostName)) trueHostName = "Unknown";
+
+        var age = __instance.gameListing.Age;
+        var lobbyTime = $"Age: {age / 60}:{(age % 60 < 10 ? "0" : "")}{age % 60}";
+
+        var platform = Utils.PlatformTypeToString(__instance.gameListing.Platform);
+
+        __instance.capacity.text = $"<size=40%>{separator}\n{trueHostName}\n{__instance.capacity.text}\n" +
+                                   $"<#fb0>{GameCode.IntToGameName(__instance.gameListing.GameId)}</color>\n" +
+                                   $"<#b0f>{platform}</color>\n{lobbyTime}\n{separator}</size>";
+
+        TMP_Text hostNameText = existingName?.GetComponent<TMP_Text>();
+        if (hostNameText == null)
+        {
+            hostNameText = UnityEngine.Object.Instantiate(__instance.capacity, nameParent, true);
+            hostNameText.gameObject.name = HostNameObject;
+        }
+
+        hostNameText.gameObject.SetActive(true);
+        hostNameText.text = $"<size=75%><b>Host: {trueHostName}</b></size>";
+        hostNameText.alignment = TextAlignmentOptions.Center;
+        hostNameText.enableAutoSizing = true;
+        hostNameText.fontSizeMin = 0.7f;
+        hostNameText.fontSizeMax = 2.4f;
+        hostNameText.overflowMode = TextOverflowModes.Ellipsis;
+
+        RectTransform hostRect = hostNameText.rectTransform;
+        RectTransform capacityRect = __instance.capacity.rectTransform;
+        Bounds cardBounds = __instance.mapBackground.bounds;
+        hostRect.position = new Vector3(cardBounds.center.x - cardBounds.extents.x * 0.225f,
+            cardBounds.center.y, capacityRect.position.z - 1f);
+        hostRect.sizeDelta = new Vector2(3.5f, 0.6f);
+        hostNameText.transform.SetAsLastSibling();
+        hostNameText.raycastTarget = false;
+    }
+}
+
+[HarmonyPatch(typeof(BanMenu), nameof(BanMenu.SetVisible))]
+public static class BanMenu_SetVisible
+{
+    // Prefix patch of BanMenu.SetVisible to always show kick and ban buttons as host
+    public static bool Prefix(BanMenu __instance, bool show)
+    {
+        if (!Utils.isHost) return true;
+
+        show &= PlayerControl.LocalPlayer && PlayerControl.LocalPlayer.Data != null;
+
+        __instance.BanButton.gameObject.SetActive(true);
+        __instance.KickButton.gameObject.SetActive(true);
+        __instance.MenuButton.gameObject.SetActive(show);
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(IGameOptionsExtensions), nameof(IGameOptionsExtensions.GetAdjustedNumImpostors))]
+public static class IGameOptionsExtensions_GetAdjustedNumImpostors
+{
+    // Prefix patch of IGameOptionsExtensions.GetAdjustedNumImpostors to remove impostor limits
+    public static bool Prefix(IGameOptions __instance, ref int __result)
+    {
+        if (!CheatToggles.noOptionsLimits) return true;
+
+        __result = GameOptionsManager.Instance.CurrentGameOptions.NumImpostors;
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(MatchInfoHudButton), nameof(MatchInfoHudButton.Update))]
+public static class MatchInfoHudButton_Update
+{
+    // Prefix patch of MatchInfoHudButton.Update to prevent MatchInfo and Chat buttons from overlapping
+    public static bool Prefix(MatchInfoHudButton __instance)
+    {
+        if (CheatToggles.enableChat)
+        {
+            __instance.aspectPosition.DistanceFromEdge = MatchInfoHudButton.adjustedDistanceFromEdge;
+
+            return false;
+        }
+
+        return true;
+    }
+}
+
+[HarmonyPatch(typeof(PlayerPurchasesData), nameof(PlayerPurchasesData.GetPurchase))]
+public static class PlayerPurchasesData_GetPurchase
+{
+    // Postfix patch of PlayerPurchasesData.GetPurchase to unlock all cosmetics
+    public static void Postfix(ref bool __result)
+    {
+        if (!CheatToggles.freeCosmetics) return;
+
+        __result = true;
+    }
+}
