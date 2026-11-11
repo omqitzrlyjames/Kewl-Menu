@@ -1,5 +1,5 @@
 # NOTICE:
-* KEWLMENU by omqItzrlyjames is a BepInEx mod menu for Among Us.
+* Menace Menu by omqItzrlyjames is a BepInEx mod menu for Among Us.
    * Original project: [soci-ety/SocietyMenu](https://github.com/soci-ety/SocietyMenu)
 ---
 <p align="center">
