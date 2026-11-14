@@ -120,7 +120,7 @@ Click to expand each topic.
 
 <details>
 
-<summary><h2>❗ KEWLMENU does not load</h2></summary>
+<summary><h2>❗ Menace Menu does not load</h2></summary>
 
 Make sure you installed **BepInEx 6 IL2CPP x64**, not BepInEx 5. Confirm that `winhttp.dll` and `doorstop_config.ini` are beside `Among Us.exe`, then launch the game once before copying the plugin files.
 
